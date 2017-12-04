@@ -337,7 +337,6 @@ void convolveDFT( Mat& I, Mat& K, Mat& O )
       Mat A = paddToSize( IChannels[i], K.size() );
       Mat B = KChannels[i];
 
-
       Mat tempA( A.size(), CV_32FC2, Scalar::all( 0 ) );
       {
          Mat planes[] = {Mat_<float>( A ), Mat::zeros( A.size(), CV_32F )};
@@ -361,9 +360,27 @@ void convolveDFT( Mat& I, Mat& K, Mat& O )
       std::vector<Mat> CChannels( 2 );
       split( tempB, CChannels );
       tempA = reorderFFT( CChannels[0] );
-      OChannels[i] = cropToSize(tempA,I.size());
+      OChannels[i] = cropToSize( tempA, I.size() );
    }
    merge( OChannels, O );
+}
+
+void addApertureNoise( Mat& A, float density )
+{
+   std::random_device rd{};
+   std::mt19937 gen{rd()};
+   std::normal_distribution<> d{1.0,0.333};
+
+   Mat_<float> _A = A;
+   for ( int i = 0; i < A.rows; ++i )
+      for ( int j = 0; j < A.cols; ++j )
+      {
+        if ( (float)std::rand()/RAND_MAX < density)
+        {
+           _A( i, j ) *= std::max(0.0,1.0 - abs(d(gen)));   
+        }
+      }
+   A = _A;
 }
 };
 
@@ -380,7 +397,10 @@ int main( int argc, char* argv[] )
    float lf_scale = parser.get<float>( "@lf_scale" );
 
    Mat K = imread( inputFilenameA.c_str(), CV_LOAD_IMAGE_GRAYSCALE );
+   K.convertTo(K, CV_32F);
+   K *= 1.0 / 255.0;
    if ( K.empty() ) return -1;
+   addApertureNoise( K, 0.015 );
    imshow( "Kernel Image", K );  // Show the result
 
    Mat I = imread( inputFilenameB.c_str(), CV_LOAD_IMAGE_COLOR );
@@ -388,8 +408,8 @@ int main( int argc, char* argv[] )
    I.convertTo( I, CV_32FC3 );
    I *= 1.0 / 255.0;
    imshow( "Input Image", I );  // Show the result
-                                // 
-   K = paddToSize(K, I.size() + I.size() );
+
+   K = paddToSize( K, I.size() + I.size() );
    if ( lf_scale > 1.0 )
    {
       K = paddToSize( K, Size( lf_scale * K.size().width, lf_scale * K.size().height ) );
@@ -410,7 +430,7 @@ int main( int argc, char* argv[] )
       // scale down for integration
       double minKMag, maxKMag;
       minMaxLoc( K, &minKMag, &maxKMag );
-      K = 0.0001 * KTransformed;  //  / ( /*(lf_scale*lf_scale) / */ ( K.cols * K.rows ) );
+      K = 0.01 * KTransformed;  //  / ( /*(lf_scale*lf_scale) / */ ( K.cols * K.rows ) );
       imshow( "spectrum magnitude", KTransformed / maxKMag );
    }
 
@@ -450,7 +470,7 @@ int main( int argc, char* argv[] )
       imshow( "result colour", bgr );
    }
 
-//   I = I * 10.0;
+   //   I = I * 10.0;
 
    convolveDFT( I, bgr, bgr );
    // normalize(bgr, bgr, 0, 1, CV_MINMAX);

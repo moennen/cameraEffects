@@ -241,7 +241,7 @@ const string keys =
     "{help h usage ? |         | print this message   }"
     "{@imageA        |         | aperture             }"
     "{@imageB        |         | image                }"
-    "{@lf_scale      |         | scale                }";
+    "{@lf_scale      |         | 1/(lambda * f)       }";
 
 Mat reorderFFT( Mat& K )
 {
@@ -266,7 +266,31 @@ Mat reorderFFT( Mat& K )
    return K;
 }
 
-Mat computeFFTMag( Mat& I )
+void addFresnel(Mat C, float lfscale)
+{
+   Mat_<Vec2f> _C = C;
+   Mat T(C.size(),CV_32F);
+   Mat_<float> _T = T;
+   lfscale = 1.0 / lfscale;
+   const float zdiag = 1.0/sqrt(0.5*C.rows*0.5*C.rows +  0.5*C.cols*0.5*C.cols);
+   for ( int i = 0; i < C.rows; ++i )
+   {
+      const float x =zdiag*lfscale*(i-0.5*C.rows);
+      for ( int j = 0; j < C.cols; ++j )
+      {
+        const float y = zdiag*lfscale*(j-0.5*C.cols);
+        const float t = M_PI*lfscale*(x*x + y*y);
+        _C( i, j )[0] *= std::cos(t);
+        _C( i, j )[1] *= std::sin(t);   
+        _T(i,j) = std::cos(t);
+      }
+   }
+   C = _C;
+   T = _T;
+   imshow("Fresnel", T);
+}
+
+Mat computeFFTSqMag( Mat& I, float lfscale )
 {
    Mat padded;  // expand input image to optimal size
    int m = getOptimalDFTSize( I.rows );
@@ -276,13 +300,19 @@ Mat computeFFTMag( Mat& I )
    Mat planes[] = {Mat_<float>( padded ), Mat::zeros( padded.size(), CV_32F )};
    Mat complexI;
    merge( planes, 2, complexI );  // Add to the expanded another plane with zeros
+    
+   //addFresnel(complexI, lfscale);
 
    dft( complexI, complexI );  // this way the result may fit in the source matrix
 
    // compute the magnitude and switch to logarithmic scale
    // => log(1 + sqrt(Re(DFT(I))^2 + Im(DFT(I))^2))
    split( complexI, planes );                     // planes[0] = Re(DFT(I), planes[1] = Im(DFT(I))
+   float z = 1.0/(complexI.rows*complexI.cols);
+   planes[0] *= z;
+   planes[1] *= z;
    magnitude( planes[0], planes[1], planes[0] );  // planes[0] = magnitude
+   multiply(planes[0],planes[0],planes[1]);
    Mat K = planes[0];
 
    // K += Scalar::all(1);                    // switch to logarithmic scale
@@ -292,8 +322,13 @@ Mat computeFFTMag( Mat& I )
    K = K( Rect( 0, 0, K.cols & -2, K.rows & -2 ) );
 
    K = reorderFFT( K );
+   
+   double minK, maxK;
+   minMaxLoc(K,&minK,&maxK);
+   imshow( "spectrum magnitude", 1000.0*(K-minK)/(maxK-minK) );
+   waitKey();
 
-   return K;
+   return 1000.0*(K-minK)/(maxK-minK);
 }
 
 Mat paddToSize( Mat& src, const Size& toSize )
@@ -400,7 +435,7 @@ int main( int argc, char* argv[] )
    K.convertTo(K, CV_32F);
    K *= 1.0 / 255.0;
    if ( K.empty() ) return -1;
-   addApertureNoise( K, 0.015 );
+   //addApertureNoise( K, 0.015 );
    imshow( "Kernel Image", K );  // Show the result
 
    Mat I = imread( inputFilenameB.c_str(), CV_LOAD_IMAGE_COLOR );
@@ -409,36 +444,39 @@ int main( int argc, char* argv[] )
    I *= 1.0 / 255.0;
    imshow( "Input Image", I );  // Show the result
 
-   K = paddToSize( K, I.size() + I.size() );
-   if ( lf_scale > 1.0 )
-   {
-      K = paddToSize( K, Size( lf_scale * K.size().width, lf_scale * K.size().height ) );
-   }
-   K = computeFFTMag( K );
+   //K = paddToSize( K, I.size() + I.size() );
 
+   Size okSize = K.size();
    if ( lf_scale > 1.0 )
    {
-      Size roi_size( K.cols / lf_scale, K.rows / lf_scale );
-      Point2f roi_center( 0.5 * K.cols, 0.5 * K.rows );
-      Mat KTransformed(
-          K,
-          Rect(
-              roi_center.x - 0.5 * roi_size.width,
-              roi_center.y - 0.5 * roi_size.height,
-              roi_size.width,
-              roi_size.height ) );
+      //K = paddToSize( K, Size( lf_scale * K.size().width, lf_scale * K.size().height ) );
+      cv::resize(K, K, cv::Size(), lf_scale, lf_scale);
+      //K = paddToSize( K, okSize );
+      imshow( "Kernel Image", K );
+   }
+   else
+   {
+      cv::resize(K, K, cv::Size(), lf_scale, lf_scale);
+      K = paddToSize( K, okSize );
+      imshow( "Kernel Image", K );
+   }
+   K = computeFFTSqMag( K, lf_scale );
+   //K = cropToSize(K,okSize);
+   
+   {
       // scale down for integration
-      double minKMag, maxKMag;
-      minMaxLoc( K, &minKMag, &maxKMag );
-      K = 0.01 * KTransformed;  //  / ( /*(lf_scale*lf_scale) / */ ( K.cols * K.rows ) );
-      imshow( "spectrum magnitude", KTransformed / maxKMag );
+      double minK, maxK;
+      minMaxLoc(K,&minK,&maxK);
+      //K = lf_scale * lf_scale * K;
+      imshow( "spectrum magnitude", K );
    }
-
+   
    Mat bgr( K.size().width, K.size().height, CV_32FC3 );
    {
       Mat x = Mat::zeros( K.size().width, K.size().height, CV_32F );
       Mat y = Mat::zeros( K.size().width, K.size().height, CV_32F );
       Mat z = Mat::zeros( K.size().width, K.size().height, CV_32F );
+      
       const int nbSamples = 100;
       const float refWL = 575;
       const float startWL = 390;
@@ -452,9 +490,10 @@ int main( int argc, char* argv[] )
          const float scale = refWL / currWL;
          const float ascale = 1.0 / ( ( fscale * refWL * fscale * refWL ) * nbSamples );
 
-         Mat scale_mat = getRotationMatrix2D( Point2f( 0.5 * K.cols, 0.5 * K.rows ), 0.0, scale );
+         Mat scale_mat = getRotationMatrix2D( Point2f( 0.5 * K.size().width, 
+            0.5 * K.size().height ), 0.0, scale );
          Mat tempA( K.size().width, K.size().height, K.type() );
-         warpAffine( K, tempA, scale_mat, tempA.size(), INTER_LINEAR );
+         warpAffine( K, tempA, scale_mat, tempA.size(), INTER_CUBIC );
 
          x += ascale * tempA * IP_XYZ_2DEG_390_830[currI][0];
          y += ascale * tempA * IP_XYZ_2DEG_390_830[currI][1];
@@ -466,14 +505,26 @@ int main( int argc, char* argv[] )
       merge( &x_y_z[0], 3, xyz );
 
       bgr = xyz;
+      imshow( "result colour CIE", xyz );
       cvtColor( xyz, bgr, COLOR_XYZ2BGR );
       imshow( "result colour", bgr );
+      waitKey();
    }
 
-   //   I = I * 10.0;
+   Mat L = Mat::zeros(I.size().width,I.size().height,CV_32FC3);
+   /*for (int i=0;i<10;++i)
+   {
+        int x = static_cast<int>(I.size().width*((float)std::rand()/RAND_MAX));
+        int y = static_cast<int>(I.size().height*((float)std::rand()/RAND_MAX));
+        L.at<Vec3f>(x,y) = 100.0* Vec3f(1.0,1.0,1.0);
+   }*/
+   L.at<Vec3f>(L.size().width/2,L.size().height/2) = 0.1 * Vec3f(1.0,1.0,1.0);
+   convolveDFT( L, bgr, bgr );
 
-   convolveDFT( I, bgr, bgr );
-   // normalize(bgr, bgr, 0, 1, CV_MINMAX);
+   imshow( "result conv overlay", bgr );
+
+   bgr += I;
+   //normalize(bgr, bgr, 0, 1, CV_MINMAX);
 
    imshow( "result conv", bgr );
 

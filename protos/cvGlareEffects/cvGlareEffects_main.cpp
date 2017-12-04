@@ -245,7 +245,7 @@ const string keys =
 
 Mat reorderFFT( Mat& K )
 {
-    // rearrange the quadrants of Fourier image  so that the origin is at the image center
+   // rearrange the quadrants of Fourier image  so that the origin is at the image center
    int cx = K.cols / 2;
    int cy = K.rows / 2;
 
@@ -291,37 +291,36 @@ Mat computeFFTMag( Mat& I )
    // crop the spectrum, if it has an odd number of rows or columns
    K = K( Rect( 0, 0, K.cols & -2, K.rows & -2 ) );
 
-   K = reorderFFT(K);
-   
+   K = reorderFFT( K );
+
    return K;
 }
 
-Mat computeFFT( Mat& I )
+Mat paddToSize( Mat& src, const Size& toSize )
 {
-   std::vector<Mat> IChannels( I.channels() );
-   split( I, IChannels );
-   std::vector<Mat> FFTChannels( I.channels(), Mat( I.cols, I.rows, CV_32FC2 ) );
-   for ( size_t i = 0; i < IChannels.size(); i++ )
-   {
-      dft( IChannels[i], FFTChannels[i], DFT_COMPLEX_OUTPUT );
-
-   }
-   Mat res( I );
-   merge( FFTChannels, I );
+   Mat res( toSize, src.type(), Scalar::all( 0 ) );
+   Mat resRoi(
+       res,
+       Rect(
+           0.5 * res.size().width - 0.5 * src.size().width,
+           0.5 * res.size().height - 0.5 * src.size().height,
+           src.size().width,
+           src.size().height ) );
+   src.copyTo( resRoi );
    return res;
 }
 
-Mat computeInvFFT( Mat& I )
+Mat cropToSize( Mat& src, const Size& toSize )
 {
-   std::vector<Mat> IChannels( I.channels() );
-   split( I, IChannels );
-   std::vector<Mat> FFTChannels( I.channels() );
-   for ( size_t i = 0; i < IChannels.size(); i++ )
-   {
-      dft( IChannels[i], FFTChannels[i], DFT_INVERSE + DFT_SCALE );
-   }
-   Mat res( I );
-   merge( FFTChannels, I );
+   Mat res( toSize, src.type() );
+   Mat srcRoi(
+       src,
+       Rect(
+           0.5 * src.size().width - 0.5 * res.size().width,
+           0.5 * src.size().height - 0.5 * res.size().height,
+           res.size().width,
+           res.size().height ) );
+   srcRoi.copyTo( res );
    return res;
 }
 
@@ -335,51 +334,16 @@ void convolveDFT( Mat& I, Mat& K, Mat& O )
 
    for ( size_t i = 0; i < IChannels.size(); i++ )
    {
-      Mat A = IChannels[i];
+      Mat A = paddToSize( IChannels[i], K.size() );
       Mat B = KChannels[i];
 
-      /*// reallocate the output array if needed
-      Mat C( abs( A.rows - B.rows ) + 1, abs( A.cols - B.cols ) + 1, A.type() );
-
-      Size dftSize;
-      // calculate the size of DFT transform
-      dftSize.width = getOptimalDFTSize( A.cols + B.cols - 1 );
-      dftSize.height = getOptimalDFTSize( A.rows + B.rows - 1 );
-
-      // allocate temporary buffers and initialize them with 0's
-      Mat tempA( dftSize, A.type(), Scalar::all( 0 ) );
-      Mat tempB( dftSize, B.type(), Scalar::all( 0 ) );
-
-      // copy A and B to the top-left corners of tempA and tempB, respectively
-      Mat roiA( tempA, Rect( 0, 0, A.cols, A.rows ) );
-      A.copyTo( roiA );
-      Mat roiB( tempB, Rect( 0, 0, B.cols, B.rows ) );
-      B.copyTo( roiB );
-
-      // now transform the padded A & B in-place;
-      // use "nonzeroRows" hint for faster processing
-      dft( tempA, tempA, 0, A.rows );
-      dft( tempB, tempB, 0, B.rows );
-
-      // multiply the spectrums;
-      // the function handles packed spectrum representations well
-      mulSpectrums( tempA, tempB, tempA, 0 );
-
-      // transform the product back from the frequency domain.
-      // Even though all the result rows will be non-zero,
-      // you need only the first C.rows of them, and thus you
-      // pass nonzeroRows == C.rows
-      dft( tempA, tempA, DFT_INVERSE + DFT_SCALE, C.rows );
-
-      // now copy the result back to C.
-      tempA( Rect( 0, 0, C.cols, C.rows ) ).copyTo( C );*/
 
       Mat tempA( A.size(), CV_32FC2, Scalar::all( 0 ) );
       {
          Mat planes[] = {Mat_<float>( A ), Mat::zeros( A.size(), CV_32F )};
          Mat complexA;
          merge( planes, 2, complexA );  // Add to the expanded another plane with zeros
-         dft( complexA,tempA, DFT_COMPLEX_OUTPUT );
+         dft( complexA, tempA, DFT_COMPLEX_OUTPUT );
       }
 
       Mat tempB( B.size(), CV_32FC2, Scalar::all( 0 ) );
@@ -387,7 +351,7 @@ void convolveDFT( Mat& I, Mat& K, Mat& O )
          Mat planes[] = {Mat_<float>( B ), Mat::zeros( B.size(), CV_32F )};
          Mat complexB;
          merge( planes, 2, complexB );  // Add to the expanded another plane with zeros
-         dft( complexB,tempB, DFT_COMPLEX_OUTPUT );
+         dft( complexB, tempB, DFT_COMPLEX_OUTPUT );
       }
 
       mulSpectrums( tempA, tempB, tempA, 0 );
@@ -396,10 +360,10 @@ void convolveDFT( Mat& I, Mat& K, Mat& O )
 
       std::vector<Mat> CChannels( 2 );
       split( tempB, CChannels );
-      OChannels[i]=reorderFFT(CChannels[0]);
+      tempA = reorderFFT( CChannels[0] );
+      OChannels[i] = cropToSize(tempA,I.size());
    }
    merge( OChannels, O );
-
 }
 };
 
@@ -424,19 +388,11 @@ int main( int argc, char* argv[] )
    I.convertTo( I, CV_32FC3 );
    I *= 1.0 / 255.0;
    imshow( "Input Image", I );  // Show the result
-
+                                // 
+   K = paddToSize(K, I.size() + I.size() );
    if ( lf_scale > 1.0 )
    {
-      Mat bigK = Mat::zeros( lf_scale * K.size().width, lf_scale * K.size().height, K.type() );
-      Mat bigRoK(
-          bigK,
-          Rect(
-              0.5 * bigK.size().width - 0.5 * K.size().width,
-              0.5 * bigK.size().height - 0.5 * K.size().height,
-              K.size().width,
-              K.size().height ) );
-      K.copyTo( bigRoK );
-      K = bigK;
+      K = paddToSize( K, Size( lf_scale * K.size().width, lf_scale * K.size().height ) );
    }
    K = computeFFTMag( K );
 
@@ -474,7 +430,7 @@ int main( int argc, char* argv[] )
          const float currWL = ( 1.0 - lerp ) * startWL + lerp * endWL;
          const int currI = std::floor( currWL ) - startWL;
          const float scale = refWL / currWL;
-         const float ascale = 1.0 / ( ( fscale * currWL * fscale * currWL ) * nbSamples );
+         const float ascale = 1.0 / ( ( fscale * refWL * fscale * refWL ) * nbSamples );
 
          Mat scale_mat = getRotationMatrix2D( Point2f( 0.5 * K.cols, 0.5 * K.rows ), 0.0, scale );
          Mat tempA( K.size().width, K.size().height, K.type() );
@@ -488,25 +444,17 @@ int main( int argc, char* argv[] )
       Mat x_y_z[3] = {x, y, z};
       Mat xyz = Mat::zeros( x.size().width, x.size().height, CV_32FC3 );
       merge( &x_y_z[0], 3, xyz );
+
+      bgr = xyz;
       cvtColor( xyz, bgr, COLOR_XYZ2BGR );
       imshow( "result colour", bgr );
-
-      //
-      Mat padded = Mat::zeros( I.size().width, I.size().height, bgr.type() );
-      Mat paddedRoi(
-          padded,
-          Rect(
-              0.5 * padded.size().width - 0.5 * bgr.size().width,
-              0.5 * padded.size().height - 0.5 * bgr.size().height,
-              bgr.size().width,
-              bgr.size().height ) );
-      bgr.copyTo( paddedRoi );
-      bgr = padded;
    }
 
-   convolveDFT( bgr, I, bgr );
-   normalize(bgr, bgr, 0, 1, CV_MINMAX);
-   
+//   I = I * 10.0;
+
+   convolveDFT( I, bgr, bgr );
+   // normalize(bgr, bgr, 0, 1, CV_MINMAX);
+
    imshow( "result conv", bgr );
 
    waitKey();

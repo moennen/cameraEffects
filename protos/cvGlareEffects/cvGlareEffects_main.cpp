@@ -243,6 +243,20 @@ const string keys =
     "{@imageB        |         | image                }"
     "{@lf_scale      |         | 1/(lambda * f)       }";
 
+
+// setting all bit from 0 to highest set - 1
+unsigned int nextPowerOfTwo( unsigned int nv )
+{
+   nv--;
+   nv |= nv >> 1;
+   nv |= nv >> 2;
+   nv |= nv >> 4;
+   nv |= nv >> 8;
+   nv |= nv >> 16;
+   nv++;
+   return nv;
+}
+
 Mat reorderFFT( Mat& K )
 {
    // rearrange the quadrants of Fourier image  so that the origin is at the image center
@@ -293,8 +307,8 @@ void addFresnel(Mat C, float lfscale)
 Mat computeFFTSqMag( Mat& I, float lfscale )
 {
    Mat padded;  // expand input image to optimal size
-   int m = getOptimalDFTSize( I.rows );
-   int n = getOptimalDFTSize( I.cols );  // on the border add zero values
+   int m = nextPowerOfTwo( I.rows );//getOptimalDFTSize( I.rows ); 
+   int n = nextPowerOfTwo( I.cols );//getOptimalDFTSize( I.cols );  // on the border add zero values
    copyMakeBorder( I, padded, 0, m - I.rows, 0, n - I.cols, BORDER_CONSTANT, Scalar::all( 0 ) );
 
    Mat planes[] = {Mat_<float>( padded ), Mat::zeros( padded.size(), CV_32F )};
@@ -309,11 +323,13 @@ Mat computeFFTSqMag( Mat& I, float lfscale )
    // => log(1 + sqrt(Re(DFT(I))^2 + Im(DFT(I))^2))
    split( complexI, planes );                     // planes[0] = Re(DFT(I), planes[1] = Im(DFT(I))
    float z = 1.0/(complexI.rows*complexI.cols);
+   std::cout << I.cols << "/" << complexI.cols << "/" << complexI.rows*complexI.cols << std::endl;
    planes[0] *= z;
    planes[1] *= z;
+
    magnitude( planes[0], planes[1], planes[0] );  // planes[0] = magnitude
    multiply(planes[0],planes[0],planes[1]);
-   Mat K = planes[0];
+   Mat K = planes[1];
 
    // K += Scalar::all(1);                    // switch to logarithmic scale
    // log(K, K);
@@ -323,12 +339,16 @@ Mat computeFFTSqMag( Mat& I, float lfscale )
 
    K = reorderFFT( K );
    
-   double minK, maxK;
+   /*double minK, maxK;
    minMaxLoc(K,&minK,&maxK);
-   imshow( "spectrum magnitude", 1000.0*(K-minK)/(maxK-minK) );
-   waitKey();
+   std::cout << "MaxFFTMag = " << maxK << std::endl;
+   minK = 0.0;
+   imshow( "spectrum magnitude probe", 1000.0*(K/maxK) );
+   waitKey();*/
 
-   return 1000.0*(K-minK)/(maxK-minK);
+   return (K-minK)/(maxK-minK);
+
+   return K;
 }
 
 Mat paddToSize( Mat& src, const Size& toSize )
@@ -429,14 +449,15 @@ int main( int argc, char* argv[] )
    }
    string inputFilenameA = parser.get<string>( "@imageA" );
    string inputFilenameB = parser.get<string>( "@imageB" );
-   float lf_scale = parser.get<float>( "@lf_scale" );
+   const float effect = parser.get<float>( "@lf_scale" );
+   float lf_scale = 1.0;
 
    Mat K = imread( inputFilenameA.c_str(), CV_LOAD_IMAGE_GRAYSCALE );
    K.convertTo(K, CV_32F);
    K *= 1.0 / 255.0;
    if ( K.empty() ) return -1;
-   //addApertureNoise( K, 0.015 );
-   imshow( "Kernel Image", K );  // Show the result
+   //addApertureNoise( K, 0.5 );
+   //imshow( "Kernel Image", K );  // Show the result
 
    Mat I = imread( inputFilenameB.c_str(), CV_LOAD_IMAGE_COLOR );
    if ( I.empty() ) return -1;
@@ -458,42 +479,55 @@ int main( int argc, char* argv[] )
    {
       cv::resize(K, K, cv::Size(), lf_scale, lf_scale);
       K = paddToSize( K, okSize );
-      imshow( "Kernel Image", K );
+      //imshow( "Kernel Image", K );
    }
    K = computeFFTSqMag( K, lf_scale );
-   //K = cropToSize(K,okSize);
+   K = cropToSize(K,okSize);
    
    {
       // scale down for integration
       double minK, maxK;
       minMaxLoc(K,&minK,&maxK);
       //K = lf_scale * lf_scale * K;
+      K = K / maxK;
       imshow( "spectrum magnitude", K );
-   }
+      waitKey();
+   }  
+
+
+   // camera parameters
+   float cameraFOV = 40.0*M_PI/180.0;
+   float cameraFocalLength = 22.0;
+
+   float pxFocal =  (0.5*okSize.height) / std::tan(0.5*cameraFOV);
+   float mmToPx = pxFocal/cameraFocalLength;
+   const float nmTomm = 0.000001;
    
-   Mat bgr( K.size().width, K.size().height, CV_32FC3 );
+   Mat bgr( K.size(), CV_32FC3 );
    {
-      Mat x = Mat::zeros( K.size().width, K.size().height, CV_32F );
-      Mat y = Mat::zeros( K.size().width, K.size().height, CV_32F );
-      Mat z = Mat::zeros( K.size().width, K.size().height, CV_32F );
+      Mat x = Mat::zeros( K.size(), CV_32F );
+      Mat y = Mat::zeros( K.size(), CV_32F );
+      Mat z = Mat::zeros( K.size(), CV_32F );
       
-      const int nbSamples = 100;
+      const int nbSamples = 256;
       const float refWL = 575;
       const float startWL = 390;
       const float endWL = 830;
       const float fscale = lf_scale / 575;
+      const float dWL = (endWL - startWL)/nbSamples;
+      const float refScale = effect*pxFocal*mmToPx*refWL*nmTomm;
       for ( int i = 0; i < nbSamples; ++i )
       {
-         const float lerp = ( i / ( nbSamples - 1.0 ) );
-         const float currWL = ( 1.0 - lerp ) * startWL + lerp * endWL;
-         const int currI = std::floor( currWL ) - startWL;
-         const float scale = refWL / currWL;
-         const float ascale = 1.0 / ( ( fscale * refWL * fscale * refWL ) * nbSamples );
+         const float lerp = ( (float)i / ( nbSamples - 1 ) );
+         const float currWL = std::floor(( 1.0 - lerp ) * startWL + lerp * endWL);
+         const int currI = currWL - startWL;
+         const float scale = refScale * ( refWL / currWL );
+         const float ascale = 100000.0 * dWL / ( refScale*refScale ) ;
 
          Mat scale_mat = getRotationMatrix2D( Point2f( 0.5 * K.size().width, 
             0.5 * K.size().height ), 0.0, scale );
-         Mat tempA( K.size().width, K.size().height, K.type() );
-         warpAffine( K, tempA, scale_mat, tempA.size(), INTER_CUBIC );
+         Mat tempA( K.size(), K.type() );
+         warpAffine( K, tempA, scale_mat, tempA.size(), INTER_LINEAR );
 
          x += ascale * tempA * IP_XYZ_2DEG_390_830[currI][0];
          y += ascale * tempA * IP_XYZ_2DEG_390_830[currI][1];
@@ -501,17 +535,17 @@ int main( int argc, char* argv[] )
       }
 
       Mat x_y_z[3] = {x, y, z};
-      Mat xyz = Mat::zeros( x.size().width, x.size().height, CV_32FC3 );
+      Mat xyz = Mat::zeros( x.size(), CV_32FC3 );
       merge( &x_y_z[0], 3, xyz );
 
       bgr = xyz;
-      imshow( "result colour CIE", xyz );
+      //imshow( "result colour CIE", xyz );
       cvtColor( xyz, bgr, COLOR_XYZ2BGR );
       imshow( "result colour", bgr );
       waitKey();
    }
 
-   Mat L = Mat::zeros(I.size().width,I.size().height,CV_32FC3);
+   Mat L = Mat::zeros(I.size(),CV_32FC3);
    /*for (int i=0;i<10;++i)
    {
         int x = static_cast<int>(I.size().width*((float)std::rand()/RAND_MAX));
@@ -521,14 +555,14 @@ int main( int argc, char* argv[] )
    L.at<Vec3f>(L.size().width/2,L.size().height/2) = 0.1 * Vec3f(1.0,1.0,1.0);
    convolveDFT( L, bgr, bgr );
 
-   imshow( "result conv overlay", bgr );
+   /*imshow( "result conv overlay", bgr );
 
    bgr += I;
    //normalize(bgr, bgr, 0, 1, CV_MINMAX);
 
    imshow( "result conv", bgr );
 
-   waitKey();
+   waitKey();*/
 
    return ( 0 );
 }

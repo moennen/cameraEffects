@@ -261,6 +261,13 @@ struct AbModel
    size_t height;
    size_t focalLength;
 
+   float maxSphericalAberration;
+   float maxChromaticAberration;
+
+   // xy = foc dist of the 2 intersecting envelop points
+   // zw = scaling factor at 0,x
+   vec4 remappingModel;
+
    AbModel(
        const float minW = 380.0f,
        const float maxW = 780.0f,
@@ -275,20 +282,40 @@ struct AbModel
          texHeight( h ),
          texWidth( w ),
          height( h / 2 ),
-         focalLength( w / 2 )
+         focalLength( w / 2 ),
+         maxSphericalAberration(0.5),
+         maxChromaticAberration(0.25)
    {
+        // compute the remapping model : a 3 piece-wise linear model of the stretching
+        const float maxNormHeight(static_cast<float>(height)/texHeight);
+	const float focNorm(static_cast<float>(focalLength/texWidth));
+        const vec2 frontLineEnv(-maxNormHeight/focNorm,maxNormHeight);
+	const float minFocNorm((focalLength*(1.0f-maxSphericalAberration-maxChromaticAberration))/texWidth);
+        const vec2 backLineEnv(maxNormHeight/minFocNorm,-maxNormHeight);
+        const float backFrontEnvIntersectX = (backLineEnv.y-frontLineEnv.y)/(frontLineEnv.x-backLineEnv.x);
+        const vec2 backFrontEnvIntersect(backFrontEnvIntersectX,frontLineEnv.x*backFrontEnvIntersectX+frontLineEnv.y); 
+        const vec2 backBoundEnvIntersect((backLineEnv.x-1.0f)/(-backLineEnv.y),1.0f);
+        
+	remappingModel.x = backFrontEnvIntersect.x * texWidth;
+	remappingModel.y = backBoundEnvIntersect.x * texWidth;
+	remappingModel.z = 1.0f / maxNormHeight;
+        remappingModel.w = 1.0f / backFrontEnvIntersect.y  ;  
    }
 
    float getFocDistance( const float h, const float wl )
    {
-      const float maxChromaticAberration = 0.1;
       const float normCAb = clamp( ( maxWl - wl ) / ( maxWl - minWl ), 0.0f, 1.0f );
       const float sqCAb = mix( 0.0f, maxChromaticAberration, normCAb /** normCAb*/ );
-      const float maxSphericalAberration = 0.0;
       const float normSAb = clamp( ( height - h ) / height, 0.0f, 1.0f );
       const float sqSAb = mix( maxSphericalAberration, 0.0f, normSAb /* * normSAb*/ );
 
       return focalLength * ( 1.0 - sqSAb - sqCAb );
+   }
+
+   inline float getStretchHeight(const float foc)
+   { 
+      	
+      
    }
 
    inline vec2 toGl( const float f, const float h )
@@ -352,16 +379,50 @@ void drawBokehProfile( void )
 
       for ( size_t sh = 0; sh < abModel.nHeightSamples; ++sh )
       {
+         glBegin( GL_LINE_STRIP );
+         
          const float h =
              mix( 0.0f, (float)abModel.height, (float)sh / ( abModel.nHeightSamples - 1 ) );
-         const vec2 s = abModel.toGl( 0.0, h );
+         
+         {
+            const vec2 pd = abModel.toGl( 0.0, h );//*abModel.remappingModel.z;         
+            glVertex2f( pd.x, pd.y );
+         }
+         
          const float foc = abModel.getFocDistance( h, wl );
-         const vec2 m = abModel.toGl( foc, 0.0 );
-         const float b = getFocDst( foc, abModel.height, normalize( vec2( foc, h ) ) );
+	
+         if (foc > abModel.remappingModel.x )
+         {
+            // point to the intersection
+            vec2 p(abModel.remappingModel.x, h-h*abModel.remappingModel.x/foc); 
+	    vec2 pd = abModel.toGl(p.x,p.y);//*abModel.remappingModel.w;
+            glVertex2f( pd.x, pd.y );
+	    if ( foc > abModel.remappingModel.y  )
+            {
+               p = vec2(abModel.remappingModel.y, h-h*abModel.remappingModel.y/foc); 
+	       pd = abModel.toGl(p.x,p.y);//1.0f;
+	       glVertex2f( pd.x, pd.y );
+	       p = vec2( foc, 0.0 ); 
+	       pd = abModel.toGl(p.x,p.y);//1.0f;
+	       glVertex2f( pd.x, pd.y );
+            }
+            else
+            {
+	       p = vec2( foc, 0.0 ); 
+	       pd = abModel.toGl(p.x,p.y);//*mix(abModel.remappingModel.w,1.0,(foc-abModel.remappingModel.x)/(abModel.remappingModel.y-abModel.remappingModel.x));
+	       glVertex2f( pd.x, pd.y );
+            }            
+         }	
+	 else
+         {
+            vec2 pd = abModel.toGl( foc, 0.0 );//*mix(abModel.remappingModel.z,abModel.remappingModel.w,foc/abModel.remappingModel.x);
+            glVertex2f( pd.x, pd.y );
+            p = abModel.toGl(abModel.remappingModel.x, -h+h*abModel.remappingModel.x/foc);//*abModel.remappingModel.w;
+            glVertex2f( pd.x, pd.y );
+         } 
+                 const float b = getFocDst( foc, abModel.texHeight, normalize( vec2( foc, h ) ) );
          const vec2 e = abModel.toGl( b, abModel.texHeight );
 
-         glBegin( GL_LINE_STRIP );
-         glVertex2f( s.x, s.y );
          glVertex2f( m.x, m.y );
          glVertex2f( e.x, e.y );
          glEnd();

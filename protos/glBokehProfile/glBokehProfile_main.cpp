@@ -96,7 +96,7 @@ struct colourSystem
 #define IlluminantC 0.3101, 0.3162         /* For NTSC television */
 #define IlluminantD65 0.3127, 0.3291       /* For EBU and SMPTE */
 #define IlluminantE 0.33333333, 0.33333333 /* CIE equal-energy illuminant */
-#define GAMMA_REC709 0 /* Rec. 709 */
+#define GAMMA_REC709 0                     /* Rec. 709 */
 
 static struct colourSystem
     /* Name                  xRed    yRed    xGreen  yGreen  xBlue  yBlue    White point Gamma   */
@@ -108,37 +108,41 @@ static struct colourSystem
     CIEsystem = {"CIE", 0.7355, 0.2645, 0.2658, 0.7243, 0.1669, 0.0085, IlluminantE, GAMMA_REC709},
     Rec709system = {"CIE REC 709", 0.64, 0.33, 0.30, 0.60, 0.15, 0.06, IlluminantD65, GAMMA_REC709};
 
-inline int constrain_rgb(double *r, double *g, double *b)
+inline int constrain_rgb( double* r, double* g, double* b )
 {
-    double w;
+   double w;
 
-    /* Amount of white needed is w = - min(0, *r, *g, *b) */
+   /* Amount of white needed is w = - min(0, *r, *g, *b) */
 
-    w = (0 < *r) ? 0 : *r;
-    w = (w < *g) ? w : *g;
-    w = (w < *b) ? w : *b;
-    w = -w;
+   w = ( 0 < *r ) ? 0 : *r;
+   w = ( w < *g ) ? w : *g;
+   w = ( w < *b ) ? w : *b;
+   w = -w;
 
-    /* Add just enough white to make r, g, b all positive. */
+   /* Add just enough white to make r, g, b all positive. */
 
-    if (w > 0) {
-        *r += w;  *g += w; *b += w;
-        return 1;                     /* Colour modified to fit RGB gamut */
-    }
+   if ( w > 0 )
+   {
+      *r += w;
+      *g += w;
+      *b += w;
+      return 1; /* Colour modified to fit RGB gamut */
+   }
 
-    return 0;                         /* Colour within RGB gamut */
+   return 0; /* Colour within RGB gamut */
 }
 
-void norm_rgb(double *r, double *g, double *b)
+void norm_rgb( double* r, double* g, double* b )
 {
-#define Max(a, b)   (((a) > (b)) ? (a) : (b))
-    double greatest = Max(*r, Max(*g, *b));
+#define Max( a, b ) ( ( ( a ) > ( b ) ) ? ( a ) : ( b ) )
+   double greatest = Max( *r, Max( *g, *b ) );
 
-    if (greatest > 0) {
-        *r /= greatest;
-        *g /= greatest;
-        *b /= greatest;
-    }
+   if ( greatest > 0 )
+   {
+      *r /= greatest;
+      *g /= greatest;
+      *b /= greatest;
+   }
 #undef Max
 }
 
@@ -205,8 +209,8 @@ inline vec3 xyz_to_rgb( const dvec3 xyz )
    double g = ( gx * xc ) + ( gy * yc ) + ( gz * zc );
    double b = ( bx * xc ) + ( by * yc ) + ( bz * zc );
 
-   constrain_rgb(&r, &g, &b);
-   norm_rgb(&r, &g, &b);
+   constrain_rgb( &r, &g, &b );
+   norm_rgb( &r, &g, &b );
 
    vec3 rgb;
    rgb.r = r;
@@ -216,16 +220,14 @@ inline vec3 xyz_to_rgb( const dvec3 xyz )
    return rgb;
 }
 
-double bbTemp = 5700;                  /* Hidden temperature argument
-                                         to BB_SPECTRUM. */
-double bb_spectrum(double wavelength)
+double bbTemp = 5700; /* Hidden temperature argument
+                        to BB_SPECTRUM. */
+double bb_spectrum( double wavelength )
 {
-    double wlm = wavelength * 1e-9;   /* Wavelength in meters */
+   double wlm = wavelength * 1e-9; /* Wavelength in meters */
 
-    return (3.74183e-16 * pow(wlm, -5.0)) /
-           (exp(1.4388e-2 / (wlm * bbTemp)) - 1.0);
+   return ( 3.74183e-16 * pow( wlm, -5.0 ) ) / ( exp( 1.4388e-2 / ( wlm * bbTemp ) ) - 1.0 );
 }
-
 
 /*inline vec3 xyz_to_rgb( const vec3 xyz )
 {
@@ -243,7 +245,7 @@ double bb_spectrum(double wavelength)
                    -0.0146949f,
                    1.0093968f};*/
 
- /*  return rgb2xyz * xyz;
+/*  return rgb2xyz * xyz;
 }*/
 
 // this represent a set of curves from lens height to focal length bias
@@ -283,23 +285,26 @@ struct AbModel
          texWidth( w ),
          height( h / 2 ),
          focalLength( w / 2 ),
-         maxSphericalAberration(0.5),
-         maxChromaticAberration(0.25)
+         maxSphericalAberration( 0.001 ),
+         maxChromaticAberration( 0.0 )
    {
-        // compute the remapping model : a 3 piece-wise linear model of the stretching
-        const float maxNormHeight(static_cast<float>(height)/texHeight);
-	const float focNorm(static_cast<float>(focalLength/texWidth));
-        const vec2 frontLineEnv(-maxNormHeight/focNorm,maxNormHeight);
-	const float minFocNorm((focalLength*(1.0f-maxSphericalAberration-maxChromaticAberration))/texWidth);
-        const vec2 backLineEnv(maxNormHeight/minFocNorm,-maxNormHeight);
-        const float backFrontEnvIntersectX = (backLineEnv.y-frontLineEnv.y)/(frontLineEnv.x-backLineEnv.x);
-        const vec2 backFrontEnvIntersect(backFrontEnvIntersectX,frontLineEnv.x*backFrontEnvIntersectX+frontLineEnv.y); 
-        const vec2 backBoundEnvIntersect((backLineEnv.x-1.0f)/(-backLineEnv.y),1.0f);
-        
-	remappingModel.x = backFrontEnvIntersect.x * texWidth;
-	remappingModel.y = backBoundEnvIntersect.x * texWidth;
-	remappingModel.z = 1.0f / maxNormHeight;
-        remappingModel.w = 1.0f / backFrontEnvIntersect.y  ;  
+      // compute the remapping model : a 3 piece-wise linear model of the stretching
+      const float maxNormHeight( static_cast<float>( height ) / texHeight );
+      const float focNorm( static_cast<float>( focalLength / texWidth ) );
+      const vec2 frontLineEnv( -maxNormHeight / focNorm, maxNormHeight );
+      const float minFocNorm(
+          ( focalLength * ( 1.0f - maxSphericalAberration - maxChromaticAberration ) ) / texWidth );
+      const vec2 backLineEnv( maxNormHeight / minFocNorm, -maxNormHeight );
+      const float backFrontEnvIntersectX =
+          ( backLineEnv.y - frontLineEnv.y ) / ( frontLineEnv.x - backLineEnv.x );
+      const vec2 backFrontEnvIntersect(
+          backFrontEnvIntersectX, frontLineEnv.x * backFrontEnvIntersectX + frontLineEnv.y );
+      const vec2 backBoundEnvIntersect( ( backLineEnv.x - 1.0f ) / ( -backLineEnv.y ), 1.0f );
+
+      remappingModel.x = backFrontEnvIntersect.x * texWidth;
+      remappingModel.y = backBoundEnvIntersect.x * texWidth;
+      remappingModel.z = 1.0f / maxNormHeight;
+      remappingModel.w = 1.0f / backFrontEnvIntersect.y;
    }
 
    float getFocDistance( const float h, const float wl )
@@ -312,11 +317,7 @@ struct AbModel
       return focalLength * ( 1.0 - sqSAb - sqCAb );
    }
 
-   inline float getStretchHeight(const float foc)
-   { 
-      	
-      
-   }
+   inline float getStretchHeight( const float foc ) {}
 
    inline vec2 toGl( const float f, const float h )
    {
@@ -348,83 +349,100 @@ void drawBokehProfile( void )
    for ( size_t swl = 0; swl < abModel.nWlSamples; ++swl )
    {
       const float wl = mix( abModel.minWl, abModel.maxWl, (float)swl / ( abModel.nWlSamples - 1 ) );
-      const dvec3 xyz = bb_spectrum(wl) * wl_to_xyz( wl );
+      const dvec3 xyz = bb_spectrum( wl ) * wl_to_xyz( wl );
       XYZ += xyz;
-      normSpec += bb_spectrum(wl) ;
-
+      normSpec += bb_spectrum( wl );
    }
    normSpec = abModel.nWlSamples / normSpec;
    const double normXYZ = 1.0 / ( XYZ.x + XYZ.y + XYZ.z );
 
    vec3 RGB = xyz_to_rgb( XYZ );
 
-   cout << "White Point : " << RGB.x << " " << RGB.y << " " << RGB.z  << endl;
-
+   cout << "White Point : " << RGB.x << " " << RGB.y << " " << RGB.z << endl;
 
    for ( size_t swl = 0; swl < abModel.nWlSamples; ++swl )
    {
       const float wl = mix( abModel.minWl, abModel.maxWl, (float)swl / ( abModel.nWlSamples - 1 ) );
-      const dvec3 xyz = (bb_spectrum(wl) * normXYZ) * wl_to_xyz( wl ) ;
+      const dvec3 xyz = ( bb_spectrum( wl ) * normXYZ ) * wl_to_xyz( wl );
       const vec3 rgb = xyz_to_rgb( xyz );
 
-      cout << wl << " " << bb_spectrum(wl) * normSpec << endl;
+      cout << wl << " " << bb_spectrum( wl ) * normSpec << endl;
 
-      const float sampleZ = (bb_spectrum(wl) * normSpec) / abModel.nHeightSamples;
+      const float sampleZ = ( bb_spectrum( wl ) * normSpec ) / abModel.nHeightSamples;
       glBlendColor( sampleZ, sampleZ, sampleZ, 1.0f );
-   
 
-      //cout << wl << " -> " << rgb.x << " " << rgb.y << " " << rgb.z << endl;
- 
+      // cout << wl << " -> " << rgb.x << " " << rgb.y << " " << rgb.z << endl;
+
       glColor3fv( value_ptr( rgb ) );
 
       for ( size_t sh = 0; sh < abModel.nHeightSamples; ++sh )
       {
          glBegin( GL_LINE_STRIP );
-         
+
          const float h =
              mix( 0.0f, (float)abModel.height, (float)sh / ( abModel.nHeightSamples - 1 ) );
-         
+
          {
-            const vec2 pd = abModel.toGl( 0.0, h );//*abModel.remappingModel.z;         
+            const vec2 pd = abModel.toGl( 0.0, h );  //*abModel.remappingModel.z;
             glVertex2f( pd.x, pd.y );
          }
-         
+
          const float foc = abModel.getFocDistance( h, wl );
-	
-         if (foc > abModel.remappingModel.x )
+
+         // Draw the line from (0,h) to (foc,h)
+         // --> for piecewise linear strectching use multi lines
+         if ( foc > abModel.remappingModel.x )
          {
             // point to the intersection
-            vec2 p(abModel.remappingModel.x, h-h*abModel.remappingModel.x/foc); 
-	    vec2 pd = abModel.toGl(p.x,p.y);//*abModel.remappingModel.w;
+            vec2 p( abModel.remappingModel.x, h - h * abModel.remappingModel.x / foc );
+            vec2 pd = abModel.toGl( p.x, p.y );  //*abModel.remappingModel.w;
             glVertex2f( pd.x, pd.y );
-	    if ( foc > abModel.remappingModel.y  )
+            if ( foc > abModel.remappingModel.y )
             {
-               p = vec2(abModel.remappingModel.y, h-h*abModel.remappingModel.y/foc); 
-	       pd = abModel.toGl(p.x,p.y);//1.0f;
-	       glVertex2f( pd.x, pd.y );
-	       p = vec2( foc, 0.0 ); 
-	       pd = abModel.toGl(p.x,p.y);//1.0f;
-	       glVertex2f( pd.x, pd.y );
+               p = vec2( abModel.remappingModel.y, h - h * abModel.remappingModel.y / foc );
+               pd = abModel.toGl( p.x, p.y );  // 1.0f;
+               glVertex2f( pd.x, pd.y );
+               p = vec2( foc, 0.0 );
+               pd = abModel.toGl( p.x, p.y );  // 1.0f;
+               glVertex2f( pd.x, pd.y );
             }
             else
             {
-	       p = vec2( foc, 0.0 ); 
-	       pd = abModel.toGl(p.x,p.y);//*mix(abModel.remappingModel.w,1.0,(foc-abModel.remappingModel.x)/(abModel.remappingModel.y-abModel.remappingModel.x));
-	       glVertex2f( pd.x, pd.y );
-            }            
-         }	
-	 else
+               p = vec2( foc, 0.0 );
+               pd = abModel.toGl(
+                   p.x,
+                   p.y );  //*mix(abModel.remappingModel.w,1.0,(foc-abModel.remappingModel.x)/(abModel.remappingModel.y-abModel.remappingModel.x));
+               glVertex2f( pd.x, pd.y );
+            }
+         }
+         else
          {
-            vec2 pd = abModel.toGl( foc, 0.0 );//*mix(abModel.remappingModel.z,abModel.remappingModel.w,foc/abModel.remappingModel.x);
+            vec2 pd = abModel.toGl(
+                foc,
+                0.0 );  //*mix(abModel.remappingModel.z,abModel.remappingModel.w,foc/abModel.remappingModel.x);
             glVertex2f( pd.x, pd.y );
-            p = abModel.toGl(abModel.remappingModel.x, -h+h*abModel.remappingModel.x/foc);//*abModel.remappingModel.w;
-            glVertex2f( pd.x, pd.y );
-         } 
-                 const float b = getFocDst( foc, abModel.texHeight, normalize( vec2( foc, h ) ) );
-         const vec2 e = abModel.toGl( b, abModel.texHeight );
+         }
 
-         glVertex2f( m.x, m.y );
-         glVertex2f( e.x, e.y );
+         // Draw the reflected line from (foc,0)
+         // --> account for piecewise linear model
+         
+         // Prec point is before model.x
+         if ( foc < abModel.remappingModel.x )
+         {
+            vec2 p( abModel.remappingModel.x, -h + h * abModel.remappingModel.x / foc );
+            vec2 pd = abModel.toGl( p.x, p.y );  //*abModel.remappingModel.w;
+            glVertex2f( pd.x, pd.y );
+         }
+
+         // compute the focal position of the intersection between reflected line and y=texHeight
+         const float rfoc = getFocDst( foc, abModel.texHeight, normalize( vec2( foc, h ) ) );
+         
+         {
+            vec2 p( rfoc, -h + h * rfoc / foc );
+            vec2 pd = abModel.toGl( p.x, p.y ); //*1.0;
+            glVertex2f( pd.x, pd.y );
+         }
+
          glEnd();
       }
    }
@@ -445,7 +463,7 @@ int main( int argc, char** argv )
    const int width = parser.get<int>( "width" );
    const int height = parser.get<int>( "height" );
 
-   abModel = AbModel( 380.0f, 780.0f, 128, height/10.0f, height, width );
+   abModel = AbModel( 380.0f, 780.0f, 128, height / 10.0f, height, width );
 
    glutInit( &argc, argv );
    glutInitDisplayMode( GLUT_SINGLE );

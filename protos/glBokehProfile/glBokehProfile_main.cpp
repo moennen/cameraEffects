@@ -285,26 +285,26 @@ struct AbModel
          texWidth( w ),
          height( h / 2 ),
          focalLength( w / 2 ),
-         maxSphericalAberration( 0.001 ),
+         maxSphericalAberration( 0.0 ),
          maxChromaticAberration( 0.0 )
    {
       // compute the remapping model : a 3 piece-wise linear model of the stretching
       const float maxNormHeight( static_cast<float>( height ) / texHeight );
-      const float focNorm( static_cast<float>( focalLength / texWidth ) );
+      const float focNorm( static_cast<float>( focalLength ) / texWidth );
       const vec2 frontLineEnv( -maxNormHeight / focNorm, maxNormHeight );
       const float minFocNorm(
-          ( focalLength * ( 1.0f - maxSphericalAberration - maxChromaticAberration ) ) / texWidth );
+           focNorm * ( 1.0f - maxSphericalAberration - maxChromaticAberration ) );
       const vec2 backLineEnv( maxNormHeight / minFocNorm, -maxNormHeight );
       const float backFrontEnvIntersectX =
           ( backLineEnv.y - frontLineEnv.y ) / ( frontLineEnv.x - backLineEnv.x );
       const vec2 backFrontEnvIntersect(
           backFrontEnvIntersectX, frontLineEnv.x * backFrontEnvIntersectX + frontLineEnv.y );
-      const vec2 backBoundEnvIntersect( ( backLineEnv.x - 1.0f ) / ( -backLineEnv.y ), 1.0f );
+      const vec2 backBoundEnvIntersect( ( 1.0f - backLineEnv.y ) / ( backLineEnv.x ), 1.0f );
 
       remappingModel.x = backFrontEnvIntersect.x * texWidth;
       remappingModel.y = backBoundEnvIntersect.x * texWidth;
       remappingModel.z = 1.0f / maxNormHeight;
-      remappingModel.w = 1.0f / backFrontEnvIntersect.y;
+      remappingModel.w = 1.0f / std::max(0.000001f,backFrontEnvIntersect.y);
    }
 
    float getFocDistance( const float h, const float wl )
@@ -364,11 +364,11 @@ void drawBokehProfile( void )
    {
       const float wl = mix( abModel.minWl, abModel.maxWl, (float)swl / ( abModel.nWlSamples - 1 ) );
       const dvec3 xyz = ( bb_spectrum( wl ) * normXYZ ) * wl_to_xyz( wl );
-      const vec3 rgb = xyz_to_rgb( xyz );
+      const vec3 rgb(1.0f,1.0f,1.0f) ;// = xyz_to_rgb( xyz );
 
       cout << wl << " " << bb_spectrum( wl ) * normSpec << endl;
 
-      const float sampleZ = ( bb_spectrum( wl ) * normSpec ) / abModel.nHeightSamples;
+      const float sampleZ = 1.0f; //( bb_spectrum( wl ) * normSpec ) / abModel.nHeightSamples;
       glBlendColor( sampleZ, sampleZ, sampleZ, 1.0f );
 
       // cout << wl << " -> " << rgb.x << " " << rgb.y << " " << rgb.z << endl;
@@ -383,7 +383,8 @@ void drawBokehProfile( void )
              mix( 0.0f, (float)abModel.height, (float)sh / ( abModel.nHeightSamples - 1 ) );
 
          {
-            const vec2 pd = abModel.toGl( 0.0, h );  //*abModel.remappingModel.z;
+            const vec2 pd = abModel.toGl( 0.0, h * abModel.remappingModel.z );
+            cout << pd.x << "," << pd.y << " / ";
             glVertex2f( pd.x, pd.y );
          }
 
@@ -395,15 +396,18 @@ void drawBokehProfile( void )
          {
             // point to the intersection
             vec2 p( abModel.remappingModel.x, h - h * abModel.remappingModel.x / foc );
-            vec2 pd = abModel.toGl( p.x, p.y );  //*abModel.remappingModel.w;
+            vec2 pd = abModel.toGl( p.x, p.y * abModel.remappingModel.w );
+            cout << pd.x << "," << pd.y << " / ";
             glVertex2f( pd.x, pd.y );
             if ( foc > abModel.remappingModel.y )
             {
                p = vec2( abModel.remappingModel.y, h - h * abModel.remappingModel.y / foc );
-               pd = abModel.toGl( p.x, p.y );  // 1.0f;
+               pd = abModel.toGl( p.x, p.y );
+               cout << pd.x << "," << pd.y << " / ";
                glVertex2f( pd.x, pd.y );
                p = vec2( foc, 0.0 );
-               pd = abModel.toGl( p.x, p.y );  // 1.0f;
+               pd = abModel.toGl( p.x, p.y );
+               cout << pd.x << "," << pd.y << " / ";
                glVertex2f( pd.x, pd.y );
             }
             else
@@ -411,7 +415,8 @@ void drawBokehProfile( void )
                p = vec2( foc, 0.0 );
                pd = abModel.toGl(
                    p.x,
-                   p.y );  //*mix(abModel.remappingModel.w,1.0,(foc-abModel.remappingModel.x)/(abModel.remappingModel.y-abModel.remappingModel.x));
+                   p.y * mix(abModel.remappingModel.w,1.0f,(foc-abModel.remappingModel.x)/(abModel.remappingModel.y-abModel.remappingModel.x)));
+               cout << pd.x << "," << pd.y << " / ";
                glVertex2f( pd.x, pd.y );
             }
          }
@@ -419,7 +424,8 @@ void drawBokehProfile( void )
          {
             vec2 pd = abModel.toGl(
                 foc,
-                0.0 );  //*mix(abModel.remappingModel.z,abModel.remappingModel.w,foc/abModel.remappingModel.x);
+                0.0 * mix(abModel.remappingModel.z,abModel.remappingModel.w,foc/abModel.remappingModel.x) );
+            cout << pd.x << "," << pd.y << " / ";
             glVertex2f( pd.x, pd.y );
          }
 
@@ -430,16 +436,25 @@ void drawBokehProfile( void )
          if ( foc < abModel.remappingModel.x )
          {
             vec2 p( abModel.remappingModel.x, -h + h * abModel.remappingModel.x / foc );
-            vec2 pd = abModel.toGl( p.x, p.y );  //*abModel.remappingModel.w;
+            vec2 pd = abModel.toGl( p.x, p.y * abModel.remappingModel.w );
+            cout << pd.x << "," << pd.y << " / ";
             glVertex2f( pd.x, pd.y );
          }
 
          // compute the focal position of the intersection between reflected line and y=texHeight
-         const float rfoc = getFocDst( foc, abModel.texHeight, normalize( vec2( foc, h ) ) );
-         
+         if (h>0.0f)
          {
+            const float rfoc = getFocDst( foc, abModel.texHeight, normalize( vec2( foc, h ) ) );
             vec2 p( rfoc, -h + h * rfoc / foc );
             vec2 pd = abModel.toGl( p.x, p.y ); //*1.0;
+            cout << pd.x << "," << pd.y << endl;
+            glVertex2f( pd.x, pd.y );
+         }
+         else
+         {
+            vec2 p( abModel.texWidth, 0.0f );
+            vec2 pd = abModel.toGl( p.x, p.y ); //*1.0;
+            cout << pd.x << "," << pd.y << endl;
             glVertex2f( pd.x, pd.y );
          }
 
@@ -463,7 +478,7 @@ int main( int argc, char** argv )
    const int width = parser.get<int>( "width" );
    const int height = parser.get<int>( "height" );
 
-   abModel = AbModel( 380.0f, 780.0f, 128, height / 10.0f, height, width );
+   abModel = AbModel( 380.0f, 780.0f, 1, 10, height, width );
 
    glutInit( &argc, argv );
    glutInitDisplayMode( GLUT_SINGLE );

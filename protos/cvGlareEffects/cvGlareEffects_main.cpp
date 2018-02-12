@@ -8,6 +8,7 @@
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
 #include <iostream>
+#include <glm/glm.hpp>
 
 using namespace std;
 using namespace cv;
@@ -241,7 +242,8 @@ const string keys =
     "{help h usage ? |         | print this message   }"
     "{@imageA        |         | aperture             }"
     "{@imageB        |         | image                }"
-    "{@lf_scale      |         | 1/(lambda * f)       }";
+    "{@lf_scale      |         | 1/(lambda * f)       }"
+    "{@focal         |         | 1/(lambda * f)       }";
 
 Mat reorderFFT( Mat& K )
 {
@@ -313,7 +315,7 @@ Mat computeFFTSqMag( Mat& I, float lfscale )
    planes[1] *= z;
    magnitude( planes[0], planes[1], planes[0] );  // planes[0] = magnitude
    multiply(planes[0],planes[0],planes[1]);
-   Mat K = planes[0];
+   Mat K = planes[1];
 
    // K += Scalar::all(1);                    // switch to logarithmic scale
    // log(K, K);
@@ -328,7 +330,7 @@ Mat computeFFTSqMag( Mat& I, float lfscale )
    imshow( "spectrum magnitude", 1000.0*(K-minK)/(maxK-minK) );
    waitKey();
 
-   return 1000.0*(K-minK)/(maxK-minK);
+   return K; //1000.0*(K-minK)/(maxK-minK);
 }
 
 Mat paddToSize( Mat& src, const Size& toSize )
@@ -369,8 +371,8 @@ void convolveDFT( Mat& I, Mat& K, Mat& O )
 
    for ( size_t i = 0; i < IChannels.size(); i++ )
    {
-      Mat A = paddToSize( IChannels[i], K.size() );
-      Mat B = KChannels[i];
+      Mat A = paddToSize( IChannels[i], K.size() + I.size() );
+      Mat B = paddToSize( KChannels[i], K.size() + I.size() );
 
       Mat tempA( A.size(), CV_32FC2, Scalar::all( 0 ) );
       {
@@ -400,23 +402,100 @@ void convolveDFT( Mat& I, Mat& K, Mat& O )
    merge( OChannels, O );
 }
 
-void addApertureNoise( Mat& A, float density )
+void apertureNoise( Mat& A, float density )
 {
-   std::random_device rd{};
-   std::mt19937 gen{rd()};
-   std::normal_distribution<> d{1.0,0.333};
-
+   static std::random_device rd{};
+   static std::mt19937 gen{rd()};
+   //std::normal_distribution<> d{1.0,0.333};
+   std::uniform_real_distribution<> d(0.0, 1.0);
+   
    Mat_<float> _A = A;
    for ( int i = 0; i < A.rows; ++i )
       for ( int j = 0; j < A.cols; ++j )
       {
         if ( (float)std::rand()/RAND_MAX < density)
         {
-           _A( i, j ) *= std::max(0.0,1.0 - abs(d(gen)));   
+           _A( i, j ) = std::max(0.0,1.0 - abs(d(gen)));   
         }
       }
    A = _A;
 }
+
+void apertureNoisePost( Mat& A, float val=0.5, float tol=0.05  )
+{
+   Mat_<float> _A = A;
+   for ( int i = 0; i < A.rows; ++i )
+      for ( int j = 0; j < A.cols; ++j )
+      {
+         const float curr =  _A( i, j );
+         _A( i, j ) = 1.0 -
+            glm::smoothstep(val-tol, val,curr) *
+            (1.0-glm::smoothstep(val, val+tol,curr)) ;
+                      
+      }
+   A = _A;
+}
+
+void apertureSelection( Mat& A, float val=0.5, float tol=0.05  )
+{
+   Mat_<float> _A = A;
+   Mat_<float> _I = A.clone();
+   for ( int i = 1; i < A.rows; ++i )
+      for ( int j = 1; j < A.cols; ++j )
+      {
+         const float up =  _I( i, j-1 );
+         const float left =  _I( i-1, j );
+         const float curr =  _I( i, j );
+         glm::vec2 gdt(curr-left,curr-up);
+         if (glm::length(gdt) > 0.0f) gdt = glm::normalize(gdt);
+         const float cs = glm::dot(gdt,glm::normalize(glm::vec2(0.0,0.1)));
+         _A( i, j ) = 1.0f - glm::smoothstep(0.5f,1.0f,cs);/*/cs; 1.0 -
+            glm::smoothstep(val-tol, val,cs) *
+            (1.0-glm::smoothstep(val, val+tol,cs)) ;*/
+                      
+      }
+   A = _A;
+}
+
+
+void addApertureNoise( Mat& B, float density )
+{
+   Mat A = B.clone();
+   float minSz = 5;
+   float nbScale = 10;
+   float scale = (std::log(std::min(A.cols,A.rows)/minSz)/std::log(nbScale));
+   int startScale = 4;
+   int endScale = 10;
+   for (int p=0;p<4;++p)
+   {
+   Mat N = Mat::zeros(A.rows, A.cols, A.type());
+   float cs = 1.0;
+   int n=0;
+   for (int s=0;s<nbScale;++s)
+   {
+      if ((s<endScale) && (s>=startScale))
+      {
+      Mat B = A;
+      resize(B,B,Size(),1.0/cs,1.0/cs,CV_INTER_AREA );
+      apertureNoise(B,1.0);
+      resize(B,B,N.size(),1.0, 1.0, CV_INTER_CUBIC);
+      N = N + B;
+      n++;
+      }
+      cs *= scale;
+   }
+   if (n>0) 
+   {
+      N = N*(1.0/n);
+      apertureNoisePost(N);
+      A = min(A,N);
+   }
+   }
+   apertureSelection(A);
+   B = min(B,A);
+}
+
+
 };
 
 int main( int argc, char* argv[] )
@@ -430,13 +509,16 @@ int main( int argc, char* argv[] )
    string inputFilenameA = parser.get<string>( "@imageA" );
    string inputFilenameB = parser.get<string>( "@imageB" );
    float lf_scale = parser.get<float>( "@lf_scale" );
+   float focal = parser.get<float>( "@focal" );
 
    Mat K = imread( inputFilenameA.c_str(), CV_LOAD_IMAGE_GRAYSCALE );
    K.convertTo(K, CV_32F);
    K *= 1.0 / 255.0;
    if ( K.empty() ) return -1;
-   //addApertureNoise( K, 0.015 );
+   
+   //addApertureNoise( K, 0.1 );
    imshow( "Kernel Image", K );  // Show the result
+   waitKey();
 
    Mat I = imread( inputFilenameB.c_str(), CV_LOAD_IMAGE_COLOR );
    if ( I.empty() ) return -1;
@@ -447,7 +529,7 @@ int main( int argc, char* argv[] )
    //K = paddToSize( K, I.size() + I.size() );
 
    Size okSize = K.size();
-   if ( lf_scale > 1.0 )
+   /*if ( lf_scale > 1.0 )
    {
       //K = paddToSize( K, Size( lf_scale * K.size().width, lf_scale * K.size().height ) );
       cv::resize(K, K, cv::Size(), lf_scale, lf_scale);
@@ -459,17 +541,10 @@ int main( int argc, char* argv[] )
       cv::resize(K, K, cv::Size(), lf_scale, lf_scale);
       K = paddToSize( K, okSize );
       imshow( "Kernel Image", K );
-   }
-   K = computeFFTSqMag( K, lf_scale );
-   //K = cropToSize(K,okSize);
+   }*/
    
-   {
-      // scale down for integration
-      double minK, maxK;
-      minMaxLoc(K,&minK,&maxK);
-      //K = lf_scale * lf_scale * K;
-      imshow( "spectrum magnitude", K );
-   }
+   K = computeFFTSqMag( K, 1.0 ); //lf_scale );
+   //K = cropToSize(K,okSize);
    
    Mat bgr( K.size().width, K.size().height, CV_32FC3 );
    {
@@ -477,24 +552,27 @@ int main( int argc, char* argv[] )
       Mat y = Mat::zeros( K.size().width, K.size().height, CV_32F );
       Mat z = Mat::zeros( K.size().width, K.size().height, CV_32F );
       
-      const int nbSamples = 100;
+      const int ri = K.cols / 2;
+      const int rj = K.rows / 2;
+      const int nbSamples = 128;
       const float refWL = 575;
       const float startWL = 390;
       const float endWL = 830;
-      const float fscale = lf_scale / 575;
+      //const float fscale = lf_scale / 575;
       for ( int i = 0; i < nbSamples; ++i )
       {
          const float lerp = ( i / ( nbSamples - 1.0 ) );
          const float currWL = ( 1.0 - lerp ) * startWL + lerp * endWL;
          const int currI = std::floor( currWL ) - startWL;
-         const float scale = refWL / currWL;
-         const float ascale = 1.0 / ( ( fscale * refWL * fscale * refWL ) * nbSamples );
+         const float scale = (currWL * focal); // / currWL;
+         const float ascale = lf_scale / ( ( focal * currWL * focal * currWL ) );
 
          Mat scale_mat = getRotationMatrix2D( Point2f( 0.5 * K.size().width, 
             0.5 * K.size().height ), 0.0, scale );
          Mat tempA( K.size().width, K.size().height, K.type() );
          warpAffine( K, tempA, scale_mat, tempA.size(), INTER_CUBIC );
 
+	 std::cout << currWL << " " << ascale << " " << scale << " -> " << tempA.at<Vec3f>(ri,rj) << std::endl; 
          x += ascale * tempA * IP_XYZ_2DEG_390_830[currI][0];
          y += ascale * tempA * IP_XYZ_2DEG_390_830[currI][1];
          z += ascale * tempA * IP_XYZ_2DEG_390_830[currI][2];
@@ -508,8 +586,17 @@ int main( int argc, char* argv[] )
       imshow( "result colour CIE", xyz );
       cvtColor( xyz, bgr, COLOR_XYZ2BGR );
       imshow( "result colour", bgr );
-      waitKey();
+      //waitKey();
    }
+
+   // normalize the size to one
+   //Scalar s = sum(bgr);
+   //bgr = bgr * (3.0 /  (s[0] + s[1] + s[2]));
+   Mat Ic;
+   cvtColor(I,Ic,COLOR_BGR2GRAY);
+   threshold(Ic,Ic,0.95,1.0,THRESH_BINARY);	
+   cvtColor(Ic,Ic,COLOR_GRAY2BGR);
+   multiply(Ic,I,Ic);
 
    Mat L = Mat::zeros(I.size().width,I.size().height,CV_32FC3);
    /*for (int i=0;i<10;++i)
@@ -518,9 +605,10 @@ int main( int argc, char* argv[] )
         int y = static_cast<int>(I.size().height*((float)std::rand()/RAND_MAX));
         L.at<Vec3f>(x,y) = 100.0* Vec3f(1.0,1.0,1.0);
    }*/
-   L.at<Vec3f>(L.size().width/2,L.size().height/2) = 0.1 * Vec3f(1.0,1.0,1.0);
-   convolveDFT( L, bgr, bgr );
+   L.at<Vec3f>(L.size().width/2,L.size().height/2) = Vec3f(1.0,1.0,1.0);
+   convolveDFT( Ic, bgr, bgr );
 
+   //imshow( "input overlay", Ic );
    imshow( "result conv overlay", bgr );
 
    bgr += I;

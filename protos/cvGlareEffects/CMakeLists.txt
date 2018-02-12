@@ -29,8 +29,5 @@ LINK_DIRECTORIES(
 
 ADD_EXECUTABLE(cvGlareEffects cvGlareEffects_main.cpp)
 
-TARGET_LINK_LIBRARIES( cvGlareEffects
-	boost_thread boost_system GL GLU glut cudart cublas
-	opencv_core  opencv_imgproc opencv_imgcodecs
-	opencv_highgui opencv_cudaoptflow )
+TARGET_LINK_LIBRARIES( cvGlareEffects opencv_world )
 
